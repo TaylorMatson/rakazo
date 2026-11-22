@@ -10,6 +10,8 @@ import {
   DEFAULT_COMPATIBLE_STT_MODEL,
   DEFAULT_COMPATIBLE_TTS_MODEL,
   OPENAI_COMPATIBLE_PROVIDER_ID,
+  voiceCatalogLanguageChoices,
+  voiceCatalogRequestLanguage,
   voiceConnectionForm,
 } from "@rakazo/contracts";
 import { fetchFresh } from "@rakazo/core/query";
@@ -32,6 +34,7 @@ import { useCallSession } from "../lib/call-session";
 import { useSpaceQueries } from "../lib/query";
 import { useBoundSpaceId, useSpaceRpc } from "../lib/space-rpc";
 import { speaker } from "../lib/tts";
+import { resolveUiLocale } from "../lib/ui-locale";
 import { errorText } from "../lib/user-error";
 
 export function VoiceSettingsOverlay({
@@ -63,9 +66,18 @@ export function VoiceSettingsOverlay({
     if (!catalog || !credentials || !status) return null;
     const provider = selectedProvider(catalog, [status.provider]);
     const credential = credentials.find((entry) => entry.provider === provider);
+    const language = voiceCatalogRequestLanguage({
+      supportsLanguages: Boolean(catalog.find((entry) => entry.id === provider)?.languages),
+      saved: credential?.catalogLanguage,
+      locale: deviceLanguageTag(),
+      fallbackLocale: resolveUiLocale(),
+    });
     const voices = credential
-      ? (queryClient.getQueryData(queries.voice.voices.queryKey({ input: { provider, scope } })) ??
-        [])
+      ? (queryClient.getQueryData(
+          queries.voice.voices.queryKey({
+            input: voicesQueryInput(provider, scope, language),
+          }),
+        ) ?? [])
       : [];
     return { catalog, credentials, status, provider, credential, voices };
   });
@@ -73,6 +85,7 @@ export function VoiceSettingsOverlay({
   const call = useCallSession();
   const apiKeyId = useId();
   const voiceSelectId = useId();
+  const languageSelectId = useId();
   const speechModelId = useId();
   const baseUrlId = useId();
   const ttsModelId = useId();
@@ -99,6 +112,19 @@ export function VoiceSettingsOverlay({
     cached?.credential?.voiceId || (cached?.credential ? (cached.voices[0]?.id ?? "") : ""),
   );
   const [speechModel, setSpeechModel] = useState(cached?.credential?.speechModel ?? "");
+  const [catalogLanguage, setCatalogLanguage] = useState(
+    () =>
+      voiceCatalogRequestLanguage({
+        supportsLanguages: Boolean(
+          cached?.catalog.find((entry) => entry.id === cached.provider)?.languages,
+        ),
+        saved: cached?.credential?.catalogLanguage,
+        locale: deviceLanguageTag(),
+        fallbackLocale: resolveUiLocale(),
+      }) ?? "",
+  );
+  const catalogLanguageRef = useRef(catalogLanguage);
+  catalogLanguageRef.current = catalogLanguage;
   const [baseUrl, setBaseUrl] = useState(cached?.credential?.endpoint ?? "");
   const [ttsModel, setTtsModel] = useState(cached?.credential?.ttsModel ?? "");
   const [sttModel, setSttModel] = useState(cached?.credential?.sttModel ?? "");
@@ -142,11 +168,24 @@ export function VoiceSettingsOverlay({
     nextProvider: string,
     nextCredentials: VoiceCredential[],
     keepForm = false,
+    sourceCatalog: VoiceCatalogEntry[] = catalog,
+    languageOverride?: string,
   ) {
     const request = ++voicesRequest.current;
     const cred = nextCredentials.find((entry) => entry.provider === nextProvider);
     const activeVoice = cred?.voiceId ?? "";
     const keep = (field: EditableField) => keepForm && edited.current.has(field);
+    const entry = sourceCatalog.find((item) => item.id === nextProvider);
+    const language =
+      languageOverride ??
+      (keep("catalogLanguage")
+        ? catalogLanguageRef.current
+        : voiceCatalogRequestLanguage({
+            supportsLanguages: Boolean(entry?.languages),
+            saved: cred?.catalogLanguage,
+            locale: deviceLanguageTag(),
+            fallbackLocale: resolveUiLocale(),
+          }));
     if (!keepForm) {
       edited.current.clear();
       providerRef.current = nextProvider;
@@ -155,6 +194,7 @@ export function VoiceSettingsOverlay({
     }
     if (!keep("voiceId")) setVoiceId(activeVoice);
     if (!keep("speechModel")) setSpeechModel(cred?.speechModel ?? "");
+    if (entry?.languages && !keep("catalogLanguage")) setCatalogLanguage(language ?? "");
     if (!keep("baseUrl")) setBaseUrl(cred?.endpoint ?? "");
     if (!keep("ttsModel")) setTtsModel(cred?.ttsModel ?? "");
     if (!keep("sttModel")) setSttModel(cred?.sttModel ?? "");
@@ -163,7 +203,11 @@ export function VoiceSettingsOverlay({
     return queryClient
       .fetchQuery(
         queries.voice.voices.queryOptions({
-          input: { provider: nextProvider, scope },
+          input: voicesQueryInput(
+            nextProvider,
+            scope,
+            entry?.languages ? (language ?? "") : undefined,
+          ),
           staleTime: 0,
         }),
       )
@@ -191,7 +235,7 @@ export function VoiceSettingsOverlay({
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
     setStatus(nextStatus);
-    await showProvider(selected, nextCredentials, keepForm && selected === current);
+    await showProvider(selected, nextCredentials, keepForm && selected === current, nextCatalog);
   }
 
   async function chooseProvider(nextProvider: string) {
@@ -237,9 +281,19 @@ export function VoiceSettingsOverlay({
   const hiddenSelfHosted =
     !catalog.some((entry) => entry.id === OPENAI_COMPATIBLE_PROVIDER_ID) &&
     credentials.some((entry) => entry.provider === OPENAI_COMPATIBLE_PROVIDER_ID);
-  const voiceOptions = useMemo(
-    () => (voices.length ? voices : voiceId ? [{ id: voiceId, label: voiceId }] : []),
-    [voices, voiceId],
+  const voiceOptions = useMemo(() => {
+    if (!voices.length) return voiceId ? [{ id: voiceId, label: voiceId }] : [];
+    if (voiceId && !voices.some((voice) => voice.id === voiceId)) {
+      return [{ id: voiceId, label: voiceId }, ...voices];
+    }
+    return voices;
+  }, [voices, voiceId]);
+  const languageOptions = useMemo(
+    () => [
+      { value: "", label: t`All languages` },
+      ...voiceCatalogLanguageChoices(catalogLanguage, deviceLanguageTag()),
+    ],
+    [catalogLanguage, t],
   );
 
   const selfHosted = selected?.id === OPENAI_COMPATIBLE_PROVIDER_ID;
@@ -364,6 +418,40 @@ export function VoiceSettingsOverlay({
       await refresh(selected?.id, { keepForm: true }).catch((err: unknown) =>
         setError(errorText(err, t`Could not load voice settings`)),
       );
+    } finally {
+      markPending(null);
+    }
+  }
+
+  async function chooseCatalogLanguage(next: string) {
+    if (!credential || !selected?.languages || next === catalogLanguageRef.current) return;
+    const previous = catalogLanguageRef.current;
+    edited.current.add("catalogLanguage");
+    catalogLanguageRef.current = next;
+    setCatalogLanguage(next);
+    markPending("voice");
+    setError(null);
+    try {
+      const saved = await rpc.voice.setCatalogLanguage({
+        scope,
+        provider: selected.id,
+        catalogLanguage: next,
+      });
+      const update = (current: VoiceCredential[]) =>
+        current.map((entry) => (entry.id === saved.id ? saved : entry));
+      setCredentials(update);
+      queryClient.setQueryData(queries.voice.credentials.queryKey(scoped), (current) =>
+        current ? update(current) : current,
+      );
+      edited.current.delete("catalogLanguage");
+      await showProvider(selected.id, update(credentials), true, catalog, next).catch(
+        (err: unknown) => setError(errorText(err, t`Could not load voice settings`)),
+      );
+    } catch (err) {
+      catalogLanguageRef.current = previous;
+      setCatalogLanguage(previous);
+      edited.current.delete("catalogLanguage");
+      setError(errorText(err, t`Could not save that language`));
     } finally {
       markPending(null);
     }
@@ -632,6 +720,20 @@ export function VoiceSettingsOverlay({
 
           {credential ? (
             <>
+              {selected.languages ? (
+                <Field className="mt-6">
+                  <FieldLabel htmlFor={languageSelectId}>
+                    <Trans>Language</Trans>
+                  </FieldLabel>
+                  <OptionSelect
+                    id={languageSelectId}
+                    value={catalogLanguage}
+                    disabled={busy}
+                    options={languageOptions}
+                    onValueChange={(next) => void chooseCatalogLanguage(next)}
+                  />
+                </Field>
+              ) : null}
               <Field className="mt-6">
                 <FieldLabel htmlFor={voiceSelectId}>
                   <Trans>Voice</Trans>
@@ -777,4 +879,17 @@ const NO_VOICES: VoiceInfo[] = [];
 
 const CONNECTION_FIELDS = ["speechModel", "baseUrl", "ttsModel", "sttModel", "sttBaseUrl"] as const;
 
-type EditableField = "voiceId" | (typeof CONNECTION_FIELDS)[number];
+type EditableField = "voiceId" | "catalogLanguage" | (typeof CONNECTION_FIELDS)[number];
+
+function deviceLanguageTag(): string | null {
+  if (typeof navigator === "undefined") return null;
+  return navigator.language || navigator.languages?.[0] || null;
+}
+
+function voicesQueryInput(
+  provider: string,
+  scope: SettingsScope,
+  language: string | undefined,
+): { provider: string; scope: SettingsScope; language?: string } {
+  return language === undefined ? { provider, scope } : { provider, scope, language };
+}

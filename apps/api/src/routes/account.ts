@@ -63,10 +63,12 @@ import {
   prepareVoice,
   toVoiceCredential,
   toVoiceStatus,
+  updateVoiceCatalogLanguage,
   updateVoiceSpeechModel,
   voiceContext,
   voiceCredentialHasKey,
   voiceCredentialServer,
+  voiceListingLanguage,
   voiceProviderFor,
   withVoiceConnection,
 } from "../voice.js";
@@ -568,6 +570,7 @@ export function accountRoutes(ctx: RouterContext) {
               isDefault: preference?.isDefault ?? false,
               voiceId: preference?.voiceId ?? "",
               speechModel: preference?.speechModel ?? "",
+              catalogLanguage: preference?.catalogLanguage,
               server: await voiceCredentialServer(deps, context.actor, row),
               hasKey: await voiceCredentialHasKey(deps, context.actor, row),
             });
@@ -619,6 +622,9 @@ export function accountRoutes(ctx: RouterContext) {
       setSpeechModel: authed.voice.setSpeechModel.handler(async ({ context, input }) =>
         updateVoiceSpeechModel(deps, context.actor, input),
       ),
+      setCatalogLanguage: authed.voice.setCatalogLanguage.handler(async ({ context, input }) =>
+        updateVoiceCatalogLanguage(deps, context.actor, input),
+      ),
       voices: authed.voice.voices.handler(async ({ context, input }) => {
         // A named provider lists its voices even before the copy has a default voice.
         const row = input.provider
@@ -632,9 +638,10 @@ export function accountRoutes(ctx: RouterContext) {
           : await loadDefaultVoiceCredential(deps, context.actor, input.scope, context.signal);
         if (!row) return [];
         const provider = await voiceProviderFor(deps, row.cred.provider);
+        const language = await voiceListingLanguage(deps, context.actor, row.cred, input.language);
         return withVoiceConnection(row.cred.provider, row.linked, () =>
           provider.listVoices(row.apiKey, voiceContext(context.actor, context.signal), {
-            language: input.language,
+            language,
           }),
         );
       }),

@@ -58,5 +58,6 @@ export * from "./trim-chars.js";
 export * from "./user-devices.js";
 export * from "./vault-import.js";
 export * from "./vault-items.js";
+export * from "./voice-catalog-language.js";
 export * from "./voice-connection-ui.js";
 export * from "./voice-errors.js";

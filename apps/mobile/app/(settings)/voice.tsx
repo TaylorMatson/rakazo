@@ -4,10 +4,13 @@ import {
   DEFAULT_COMPATIBLE_STT_MODEL,
   DEFAULT_COMPATIBLE_TTS_MODEL,
   OPENAI_COMPATIBLE_PROVIDER_ID,
+  voiceCatalogLanguageChoices,
+  voiceCatalogRequestLanguage,
   voiceConnectionForm,
 } from "@rakazo/contracts";
 import { fetchFresh, writeSaved } from "@rakazo/core/query";
 import { isCancelledError } from "@tanstack/react-query";
+import { getLocales } from "expo-localization";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -34,11 +37,12 @@ import { settingsRpc, settingsTarget } from "../../lib/settings-target";
 import { useSideInsets } from "../../lib/side-insets";
 import { errorText } from "../../lib/user-error";
 import { speakText } from "../../lib/voice";
+import { saveVoiceCatalogLanguage } from "../../lib/voice-catalog-language";
 
 const DEVICE_CHOICE = "device";
 
 const CONNECTION_FIELDS = ["speechModel", "baseUrl", "ttsModel", "sttModel", "sttBaseUrl"] as const;
-type VoiceField = "voiceId" | (typeof CONNECTION_FIELDS)[number];
+type VoiceField = "voiceId" | "catalogLanguage" | (typeof CONNECTION_FIELDS)[number];
 
 /** A Space's override is read from that Space even when another one is selected. */
 const targetSpace = (target: SettingsTarget) =>
@@ -52,8 +56,29 @@ const voiceReads = (target: SettingsTarget) => {
     status: rpcQuery("voice/status", input, spaceId),
   };
 };
-const voicesRead = (target: SettingsTarget, provider: string) =>
-  rpcQuery("voice/voices", { provider, scope: target.scope }, targetSpace(target));
+const voicesRead = (target: SettingsTarget, provider: string, language?: string) =>
+  rpcQuery(
+    "voice/voices",
+    language === undefined
+      ? { provider, scope: target.scope }
+      : { provider, scope: target.scope, language },
+    targetSpace(target),
+  );
+
+function deviceLanguageTag(): string | null {
+  return getLocales()[0]?.languageTag ?? null;
+}
+
+function catalogLanguageFor(
+  entry: VoiceCatalogEntry | undefined,
+  saved: string | null | undefined,
+): string | undefined {
+  return voiceCatalogRequestLanguage({
+    supportsLanguages: Boolean(entry?.languages),
+    saved,
+    locale: deviceLanguageTag(),
+  });
+}
 
 function pickProvider(catalog: VoiceCatalogEntry[], status: VoiceStatus, preferred?: string) {
   return (
@@ -72,7 +97,13 @@ function cachedVoiceSettings(target: SettingsTarget) {
   if (!catalog || !credentials || !status) return null;
   const provider = pickProvider(catalog, status);
   const credential = credentials.find((entry) => entry.provider === provider);
-  const voices = credential ? queryClient.getQueryData(voicesRead(target, provider).queryKey) : [];
+  const language = catalogLanguageFor(
+    catalog.find((entry) => entry.id === provider),
+    credential?.catalogLanguage,
+  );
+  const voices = credential
+    ? queryClient.getQueryData(voicesRead(target, provider, language).queryKey)
+    : [];
   return { catalog, credentials, status, provider, credential, voices: voices ?? [] };
 }
 
@@ -98,6 +129,15 @@ export default function VoiceSettings() {
   const [apiKey, setApiKey] = useState("");
   const [voiceId, setVoiceId] = useState(cached?.credential?.voiceId ?? "");
   const [speechModel, setSpeechModel] = useState(cached?.credential?.speechModel ?? "");
+  const [catalogLanguage, setCatalogLanguage] = useState(
+    () =>
+      catalogLanguageFor(
+        cached?.catalog.find((entry) => entry.id === cached.provider),
+        cached?.credential?.catalogLanguage,
+      ) ?? "",
+  );
+  const catalogLanguageRef = useRef(catalogLanguage);
+  catalogLanguageRef.current = catalogLanguage;
   const [baseUrl, setBaseUrl] = useState(cached?.credential?.endpoint ?? "");
   const [ttsModel, setTtsModel] = useState(cached?.credential?.ttsModel ?? "");
   const [sttModel, setSttModel] = useState(cached?.credential?.sttModel ?? "");
@@ -147,7 +187,18 @@ export default function VoiceSettings() {
    * keeps because they were typed into meanwhile.
    */
   const load = useCallback(
-    async (nextProvider?: string, { keepForm = false, reuse = false } = {}) => {
+    async (
+      nextProvider?: string,
+      {
+        keepForm = false,
+        reuse = false,
+        language: languageOverride,
+      }: {
+        keepForm?: boolean;
+        reuse?: boolean;
+        language?: string;
+      } = {},
+    ) => {
       const revision = ++loadRevision.current;
       if (!keepForm) edited.current.clear();
       const reads = voiceReads(target);
@@ -176,8 +227,21 @@ export default function VoiceSettings() {
         ["sttBaseUrl", setSttBaseUrl, cred?.sttEndpoint],
       ];
       for (const [field, set, value] of fields) if (!edited.current.has(field)) set(value ?? "");
+      const entry = nextCatalog.find((item) => item.id === selected);
+      const language =
+        languageOverride ??
+        (edited.current.has("catalogLanguage")
+          ? catalogLanguageRef.current
+          : catalogLanguageFor(entry, cred?.catalogLanguage));
+      if (entry?.languages && !edited.current.has("catalogLanguage")) {
+        setCatalogLanguage(language ?? "");
+      }
       if (cred) {
-        const nextVoices = await fetchFresh(queryClient, voicesRead(target, selected), fresh);
+        const nextVoices = await fetchFresh(
+          queryClient,
+          voicesRead(target, selected, entry?.languages ? (language ?? "") : undefined),
+          fresh,
+        );
         if (revision === loadRevision.current) setVoices(nextVoices);
       } else {
         setVoices([]);
@@ -367,6 +431,13 @@ export default function VoiceSettings() {
     apiKey,
     baseUrl,
   });
+  const voiceChoices = useMemo(() => {
+    const choices = voices.map((voice) => ({ key: voice.id, label: voice.label }));
+    if (voices.length && voiceId && !choices.some((choice) => choice.key === voiceId)) {
+      return [{ key: voiceId, label: voiceId }, ...choices];
+    }
+    return choices;
+  }, [voices, voiceId]);
 
   async function connect() {
     if (!selected || !canConnect) return;
@@ -466,6 +537,35 @@ export default function VoiceSettings() {
       await load(providerId).catch((err: unknown) => {
         if (!isCancelledError(err)) setError(errorText(err, t`Could not load voice settings`));
       });
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function chooseCatalogLanguage(next: string) {
+    if (!credential || !selected?.languages || pending !== null || next === catalogLanguage) return;
+    const previous = catalogLanguage;
+    catalogLanguageRef.current = next;
+    setCatalogLanguage(next);
+    setPending("voice");
+    setError(null);
+    if (status) setLoadError(null);
+    try {
+      const saved = await saveVoiceCatalogLanguage(rpc, {
+        provider: selected.id,
+        scope,
+        catalogLanguage: next,
+      });
+      const merge = (current: VoiceCredential[] = []) =>
+        current.map((entry) => (entry.id === saved.id ? { ...entry, ...saved } : entry));
+      loadRevision.current++;
+      setCredentials(merge);
+      await writeSaved(queryClient, voiceReads(target).credentials.queryKey, merge);
+      await load(selected.id, { keepForm: true, language: next });
+    } catch (err) {
+      catalogLanguageRef.current = previous;
+      setCatalogLanguage(previous);
+      setError(errorText(err, t`Could not save that language`));
     } finally {
       setPending(null);
     }
@@ -739,12 +839,37 @@ export default function VoiceSettings() {
                 />
               </>
             ) : null}
-            {voices.length ? (
+            {credential && selected.languages ? (
+              <View style={styles.group}>
+                <MenuPicker
+                  label={t`Language`}
+                  disabled={pending !== null}
+                  choices={[
+                    { key: "", label: t`All languages` },
+                    ...voiceCatalogLanguageChoices(catalogLanguage, deviceLanguageTag()).map(
+                      (choice) => ({ key: choice.value, label: choice.label }),
+                    ),
+                  ]}
+                  value={catalogLanguage}
+                  onChange={(key) => void chooseCatalogLanguage(key)}
+                />
+                {voices.length ? (
+                  <MenuPicker
+                    divider
+                    label={t`Voice`}
+                    disabled={pending !== null}
+                    choices={voiceChoices}
+                    value={voiceId}
+                    onChange={(key) => void chooseVoice(key)}
+                  />
+                ) : null}
+              </View>
+            ) : voices.length ? (
               <View style={styles.group}>
                 <MenuPicker
                   label={t`Voice`}
                   disabled={pending !== null}
-                  choices={voices.map((voice) => ({ key: voice.id, label: voice.label }))}
+                  choices={voiceChoices}
                   value={voiceId}
                   onChange={(key) => void chooseVoice(key)}
                 />

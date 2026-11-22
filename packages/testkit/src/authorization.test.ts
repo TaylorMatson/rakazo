@@ -503,6 +503,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["voice/voices", {}],
       ["voice/prepare", { text: "Nope" }],
       ["voice/setSpeechModel"],
+      ["voice/setCatalogLanguage"],
       ["analytics/screen"],
       ["aiConsent/status"],
       ["aiConsent/allow"],
