@@ -58,7 +58,10 @@ export function stuckWorkAgeMs(updatedAt: Date | string, now: Date): number {
 
 /** How long a run in this status may sit before the first reminder or cancellation. */
 export function stuckWorkDueAfterMs(status: StuckWorkStatus): number {
-  return Math.min(stuckWorkNotifyAfterMs(), stuckWorkExpireAfterMs(status));
+  // Takeovers expire on a fixed short limit and never remind: a short notify
+  // setting must not pull them into the reminder path.
+  if (status === "waiting_takeover") return TAKEOVER_WAIT_EXPIRE_AFTER_MS;
+  return Math.min(stuckWorkNotifyAfterMs(), waitExpireAfterMs());
 }
 
 /** `alreadyNotified` is for this episode (the run's current updatedAt), not an older one. */
@@ -68,7 +71,13 @@ export function stuckWorkAction(input: {
   alreadyNotified: boolean;
 }): StuckWorkAction {
   if (input.ageMs >= stuckWorkExpireAfterMs(input.status)) return "expire";
-  if (input.ageMs >= stuckWorkNotifyAfterMs() && !input.alreadyNotified) return "notify";
+  if (
+    input.status !== "waiting_takeover" &&
+    input.ageMs >= stuckWorkNotifyAfterMs() &&
+    !input.alreadyNotified
+  ) {
+    return "notify";
+  }
   return "none";
 }
 

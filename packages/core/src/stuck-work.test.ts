@@ -11,6 +11,7 @@ import {
   stuckWorkStatusMessages,
   stuckWorkStoppedNotification,
   TAKEOVER_WAIT_EXPIRE_AFTER_MS,
+  waitExpireAfterMs,
 } from "./stuck-work.js";
 
 describe("stuck work age", () => {
@@ -83,6 +84,28 @@ describe("stuck work timeouts from the environment", () => {
     expect(stuckWorkDueAfterMs("waiting_takeover")).toBe(TAKEOVER_WAIT_EXPIRE_AFTER_MS);
   });
 
+  it("never reminds a takeover when the reminder is shorter than thirty minutes", () => {
+    vi.stubEnv("STUCK_WORK_NOTIFY_AFTER_MS", "60000");
+    expect(stuckWorkDueAfterMs("waiting_takeover")).toBe(TAKEOVER_WAIT_EXPIRE_AFTER_MS);
+    expect(
+      stuckWorkAction({ status: "waiting_takeover", ageMs: 60_000, alreadyNotified: false }),
+    ).toBe("none");
+    expect(
+      stuckWorkAction({
+        status: "waiting_takeover",
+        ageMs: TAKEOVER_WAIT_EXPIRE_AFTER_MS - 1,
+        alreadyNotified: false,
+      }),
+    ).toBe("none");
+    expect(
+      stuckWorkAction({
+        status: "waiting_takeover",
+        ageMs: TAKEOVER_WAIT_EXPIRE_AFTER_MS,
+        alreadyNotified: false,
+      }),
+    ).toBe("expire");
+  });
+
   it("can end a wait before the default reminder would go out", () => {
     vi.stubEnv("STUCK_WORK_EXPIRE_AFTER_MS", String(2 * HOUR));
     expect(stuckWorkDueAfterMs("queued")).toBe(2 * HOUR);
@@ -127,6 +150,12 @@ describe("stuck work timeouts from the environment", () => {
     vi.stubEnv("STUCK_WORK_NOTIFY_AFTER_MS", String(HOUR));
     const hourOld = new Date(Date.now() - HOUR);
     expect(isAgedStuckWork("queued", hourOld)).toBe(false);
+  });
+
+  it("exposes the expiry used for a wait that holds its own login or code", () => {
+    expect(waitExpireAfterMs()).toBe(STUCK_WORK_EXPIRE_AFTER_MS);
+    vi.stubEnv("STUCK_WORK_EXPIRE_AFTER_MS", String(2 * HOUR));
+    expect(waitExpireAfterMs()).toBe(2 * HOUR);
   });
 });
 
