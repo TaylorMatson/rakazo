@@ -291,6 +291,37 @@ it("names someone else's message and keeps it on the people side", () => {
   expect(bubble.className).not.toContain("bg-chat-user");
 });
 
+it("pads text bubbles tightly enough that more of a thread fits on screen", () => {
+  const expectCompact = (testId: string) => {
+    const bubble = container.querySelector(`[data-testid="${testId}"]`);
+    expect(bubble?.className).toContain("px-4");
+    expect(bubble?.className).toContain("py-2.5");
+    expect(bubble?.className).not.toContain("px-[18px]");
+    expect(bubble?.className).not.toContain("py-3");
+  };
+
+  renderView("user", [{ kind: "text", text: "Hi" }]);
+  expectCompact("message-user-bubble");
+
+  renderView("bot", [{ kind: "text", text: "Hello" }]);
+  expectCompact("message-bot-bubble");
+
+  renderView("bot", [
+    { kind: "text", text: "Done." },
+    { kind: "card", lines: [{ k: "When", v: "Friday" }] },
+  ]);
+  expectCompact("message-bot-bubble");
+
+  renderView("bot", [{ kind: "progress", text: "Working" }]);
+  expectCompact("message-bot-bubble");
+
+  renderView("bot", [
+    { kind: "progress", text: "Working" },
+    { kind: "card", lines: [{ k: "When", v: "Friday" }] },
+  ]);
+  expectCompact("message-bot-bubble");
+});
+
 it("keeps my own message unnamed on the right", () => {
   const { bubble, row } = renderAuthored(authored, ana.id);
 
