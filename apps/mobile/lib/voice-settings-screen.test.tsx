@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   t: (text: string) => text,
 }));
 vi.mock("./side-insets", () => ({ useSideInsets: () => ({}) }));
+vi.mock("expo-localization", () => ({ getLocales: () => [{ languageTag: "en-US" }] }));
 vi.mock("expo-router", () => ({
   useFocusEffect: (callback: () => void) => {
     useEffect(() => {

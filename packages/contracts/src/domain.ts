@@ -1448,6 +1448,11 @@ export const VoiceCredentialSchema = z.object({
   voiceId: z.string(),
   /** Fish speech-model override. Empty uses the deployment default. */
   speechModel: z.string(),
+  /**
+   * Saved catalog language filter. Absent until chosen; empty lists every language.
+   * A code is the primary language subtag.
+   */
+  catalogLanguage: z.string().max(35).optional(),
   transcribe: z.boolean(),
   /** Self-hosted server base URL and model ids (never the key). Empty for hosted providers. */
   endpoint: z.string().default(""),

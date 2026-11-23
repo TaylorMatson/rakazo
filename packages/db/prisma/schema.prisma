@@ -977,6 +977,8 @@ model SpaceVoicePreference {
   voiceId      String              @default("")
   // Fish speech-model override. Null keeps the deployment default.
   speechModel  String?
+  // Catalog language filter. Null until chosen; empty lists every language.
+  catalogLanguage String?
   isDefault    Boolean             @default(false)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
@@ -2768,6 +2770,8 @@ model UserVoicePreference {
   voiceId      String              @default("")
   // Fish speech-model override. Null keeps the deployment default.
   speechModel  String?
+  // Catalog language filter. Null until chosen; empty lists every language.
+  catalogLanguage String?
   isDefault    Boolean             @default(false)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt

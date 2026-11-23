@@ -138,6 +138,7 @@ async function copyAccountIntoSpace(tx: CopyClient, scope: Scope, setting: Space
           credentialId: row.credentialId,
           voiceId: row.voiceId,
           speechModel: row.speechModel,
+          catalogLanguage: row.catalogLanguage,
           isDefault: row.isDefault,
         })),
       });

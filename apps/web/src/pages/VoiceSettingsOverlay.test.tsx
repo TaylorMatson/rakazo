@@ -16,6 +16,7 @@ const voice = vi.hoisted(() => ({
   disconnect: vi.fn(),
   setVoice: vi.fn(),
   setSpeechModel: vi.fn(),
+  setCatalogLanguage: vi.fn(),
 }));
 
 const { speak, activeCall } = vi.hoisted(() => ({

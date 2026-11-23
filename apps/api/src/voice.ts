@@ -24,7 +24,12 @@ import type {
   VoiceCredential,
   VoiceStatus,
 } from "@rakazo/contracts";
-import { ConnectionSetupError, SettingsScopeSchema } from "@rakazo/contracts";
+import {
+  ConnectionSetupError,
+  catalogLanguageCode,
+  SettingsScopeSchema,
+  voiceCatalogListingLanguage,
+} from "@rakazo/contracts";
 import { ClientError, speakable, toUtterances } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import {
@@ -125,6 +130,8 @@ export function toVoiceCredential(row: {
   isDefault: boolean;
   voiceId: string;
   speechModel?: string | null;
+  /** Null until chosen. Empty lists every language. */
+  catalogLanguage?: string | null;
   server?: { endpoint: string; sttEndpoint: string; ttsModel: string; sttModel: string };
   /** False when the connection uses the account's model connection instead of a key. */
   hasKey?: boolean;
@@ -136,6 +143,7 @@ export function toVoiceCredential(row: {
     isDefault: row.isDefault,
     voiceId: row.voiceId,
     speechModel: row.speechModel ?? "",
+    ...(typeof row.catalogLanguage === "string" ? { catalogLanguage: row.catalogLanguage } : {}),
     transcribe: Boolean(catalogEntry(row.provider)?.transcribe),
     endpoint: row.server?.endpoint ?? "",
     sttEndpoint: row.server?.sttEndpoint ?? "",
@@ -246,6 +254,45 @@ export function voiceCredentialPlaintext(input: {
     if (error instanceof ConnectionSetupError) throw new ClientError("BAD_REQUEST", error.message);
     throw error;
   }
+}
+
+/** Empty lists every language. Anything else must be a language tag; the primary subtag is kept. */
+export function catalogLanguageValue(catalogLanguage: string): string {
+  const trimmed = catalogLanguage.trim();
+  if (!trimmed) return "";
+  const code = catalogLanguageCode(trimmed);
+  if (!code) {
+    throw new ORPCError("BAD_REQUEST", { message: "That language is not valid." });
+  }
+  return code;
+}
+
+/**
+ * The language a catalog listing should use. A provider without the capability is never filtered.
+ * An omitted request uses the connection's saved choice, then the account's locale.
+ */
+export async function voiceListingLanguage(
+  deps: Pick<VoiceDeps, "prisma">,
+  actor: Pick<Actor, "userId">,
+  cred: { provider: string; catalogLanguage?: string | null },
+  requested?: string,
+): Promise<string | undefined> {
+  const supportsLanguages = Boolean(voiceCatalogEntry(cred.provider)?.languages);
+  if (!supportsLanguages) return undefined;
+  let locale: string | null | undefined;
+  if (requested === undefined && cred.catalogLanguage == null) {
+    const user = await deps.prisma.user.findUnique({
+      where: { id: actor.userId },
+      select: { locale: true },
+    });
+    locale = user?.locale;
+  }
+  return voiceCatalogListingLanguage({
+    requested,
+    supportsLanguages,
+    saved: cred.catalogLanguage,
+    locale,
+  });
 }
 
 /** Empty clears the speech model override. Anything else must be a header-safe model id. */
@@ -527,6 +574,7 @@ export async function persistVoiceCredential(
           isDefault: true,
           voiceId: selectedVoiceId,
           speechModel: speechModel ?? "",
+          catalogLanguage: previousPreference?.catalogLanguage ?? null,
           server,
         };
       },
@@ -606,6 +654,46 @@ export async function updateVoiceSpeechModel(
           isDefault: saved.isDefault,
           voiceId: saved.voiceId,
           speechModel: saved.speechModel,
+          catalogLanguage: saved.catalogLanguage,
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
+  );
+}
+
+export async function updateVoiceCatalogLanguage(
+  deps: VoiceDeps,
+  actor: Actor,
+  input: { provider: string; catalogLanguage: string; scope?: SettingsScope },
+): Promise<VoiceCredential> {
+  if (!voiceCatalogEntry(input.provider)?.languages) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "This voice provider has no language filter.",
+    });
+  }
+  const catalogLanguage = catalogLanguageValue(input.catalogLanguage);
+  return withTransactionRetry(() =>
+    deps.prisma.$transaction(
+      async (tx) => {
+        const found = await tx.userVoiceCredential.findFirst({
+          where: { userId: actor.userId, provider: input.provider },
+          orderBy: newestVoiceCredentialOrder,
+        });
+        if (!found) {
+          throw new ORPCError("BAD_REQUEST", { message: "Connect a voice provider first." });
+        }
+        await lockSpaceSettings(tx, actor);
+        const target = await voicePreferenceTarget(tx, actor, input.scope);
+        // Remember the language without taking the default. Another provider may already
+        // be selected, and a new row still has no voice. Empty is a choice: every language.
+        const saved = await saveVoicePreference(tx, target, found.id, { catalogLanguage });
+        return toVoiceCredential({
+          ...found,
+          isDefault: saved.isDefault,
+          voiceId: saved.voiceId,
+          speechModel: saved.speechModel,
+          catalogLanguage: saved.catalogLanguage ?? "",
         });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

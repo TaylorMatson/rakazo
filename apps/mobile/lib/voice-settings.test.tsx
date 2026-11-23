@@ -43,6 +43,7 @@ vi.mock("./call-sounds", () => ({
   playCallCue: vi.fn(),
 }));
 vi.mock("./voice", () => ({ speakText: vi.fn() }));
+vi.mock("expo-localization", () => ({ getLocales: () => [{ languageTag: "en-US" }] }));
 vi.mock("./appearance", () => ({ mobileTokens: () => ({}) }));
 vi.mock("./native", () => ({ native: {}, useThemedStyles: (factory: () => unknown) => factory() }));
 vi.mock("../components/row-accessories", () => ({
@@ -196,6 +197,55 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+});
+
+it("filters the voice list by language and remembers the choice", async () => {
+  state.load.mockResolvedValue(false);
+  const original = state.rpc.getMockImplementation()!;
+  state.rpc.mockImplementation(
+    (proc: string, args?: { provider?: string; catalogLanguage?: string }) => {
+      if (proc === "voice/catalog") {
+        return [{ id: "fish-audio", name: "Fish Audio", transcribe: true, languages: true }];
+      }
+      if (proc === "voice/setCatalogLanguage") {
+        return {
+          id: "fish",
+          provider: "fish-audio",
+          voiceId: "fish-voice",
+          speechModel: "speech-model",
+          catalogLanguage: args?.catalogLanguage ?? "",
+        };
+      }
+      return original(proc, args);
+    },
+  );
+  await render();
+  expect(state.rpc).toHaveBeenCalledWith(
+    "voice/voices",
+    expect.objectContaining({ provider: "fish-audio", scope: "account", language: "en" }),
+    expect.anything(),
+  );
+  await click("Deutsch");
+  expect(state.rpc).toHaveBeenCalledWith("voice/setCatalogLanguage", {
+    provider: "fish-audio",
+    scope: "account",
+    catalogLanguage: "de",
+  });
+  expect(state.rpc).toHaveBeenCalledWith(
+    "voice/voices",
+    expect.objectContaining({ provider: "fish-audio", language: "de" }),
+    expect.anything(),
+  );
+  await click("All languages");
+  expect(state.rpc).toHaveBeenCalledWith(
+    "voice/setCatalogLanguage",
+    expect.objectContaining({ catalogLanguage: "" }),
+  );
+  expect(state.rpc).toHaveBeenCalledWith(
+    "voice/voices",
+    expect.objectContaining({ language: "" }),
+    expect.anything(),
+  );
 });
 
 it("selects only This device and hides provider controls until a provider is chosen", async () => {

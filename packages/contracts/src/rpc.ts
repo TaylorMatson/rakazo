@@ -1723,6 +1723,15 @@ export const appContract = {
         }),
       )
       .output(VoiceCredentialSchema),
+    /** Empty lists every language. Remembered on the voice connection. */
+    setCatalogLanguage: oc
+      .input(
+        settingsScopeInput.extend({
+          provider: z.string().min(1),
+          catalogLanguage: z.string().max(35),
+        }),
+      )
+      .output(VoiceCredentialSchema),
     voices: oc
       .input(
         settingsScopeInput.extend({

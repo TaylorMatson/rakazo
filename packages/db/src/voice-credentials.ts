@@ -88,7 +88,12 @@ export async function saveVoicePreference(
   prisma: VoicePreferenceClient,
   target: VoiceTarget,
   credentialId: string,
-  data: { voiceId?: string; speechModel?: string | null; isDefault?: true },
+  data: {
+    voiceId?: string;
+    speechModel?: string | null;
+    catalogLanguage?: string | null;
+    isDefault?: true;
+  },
 ) {
   if (data.isDefault) {
     const others = { isDefault: true, credentialId: { not: credentialId } };
@@ -151,6 +156,7 @@ function withVoicePreference<
     isDefault: boolean;
     voiceId: string;
     speechModel: string | null;
+    catalogLanguage?: string | null;
   },
 >(preference: T) {
   return {
@@ -158,6 +164,7 @@ function withVoicePreference<
     isDefault: preference.isDefault,
     voiceId: preference.voiceId,
     speechModel: preference.speechModel ?? "",
+    catalogLanguage: preference.catalogLanguage ?? null,
   };
 }
 
@@ -196,5 +203,7 @@ export async function findVoiceCredential(
   });
   if (preference) return withVoicePreference(preference);
   const credential = await findNewestUserVoiceCredential(prisma, scope.userId, provider);
-  return credential ? { ...credential, isDefault: false, voiceId: "", speechModel: "" } : null;
+  return credential
+    ? { ...credential, isDefault: false, voiceId: "", speechModel: "", catalogLanguage: null }
+    : null;
 }
